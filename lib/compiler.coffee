@@ -2534,9 +2534,9 @@ exports.compile = (tree, base_output_filename, source_filename, module_infos, op
 
         if options.debug
                 dibuilder = new llvm.DIBuilder module
-                difile = dibuilder.createFile(source_filename, process.cwd())
+                difile = dibuilder.createFile(source_filename + ".js", process.cwd())
 
-                dibuilder.createCompileUnit(source_filename, process.cwd(), "ejs", true, "", 2);
+                dibuilder.createCompileUnit(source_filename + ".js", process.cwd(), "ejs", true, "", 2);
 
         visitor = new AddFunctionsVisitor module, abi, dibuilder, difile
         tree = visitor.visit tree

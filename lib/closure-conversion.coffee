@@ -302,7 +302,7 @@ DesugarClasses = class DesugarClasses extends TransformPass
                 # splat args into the call to super's ctor if there's a superclass
                 args_id = b.identifier('args');
                 functionBody = b.blockStatement(if ast_class.superClass then [b.expressionStatement(b.callExpression(b.identifier('super'), [b.spreadElement(args_id)]))] else [])
-                rtn = b.methodDefinition(b.identifier('constructor'), b.functionExpression(null, [], functionBody, [], args_id))
+                rtn = b.methodDefinition(b.identifier('constructor'), b.functionExpression(null, [], functionBody, [], args_id, ast_class.loc))
                 # XXX is this right?  this will cause stepping to bounce to the class's first line.  maybe set them to 0?
                 functionBody.loc = ast_class.loc
                 rtn.loc = ast_class.loc

@@ -91,7 +91,7 @@ exports.arrayPattern
 exports.arrowFunctionExpression = (params, body, defaults=[], rest=null, expression=false) -> type: ArrowFunctionExpression, params: params.map(isast), defaults: defaults.map(isast), rest: isnullableast(rest), body: isast(body), expression: expression
 exports.assignmentExpression = (l, op, r) -> type: AssignmentExpression, operator: op, left: isast(l), right: isast(r)
 exports.binaryExpression = (l, op, r) -> type: BinaryExpression, operator: op, left: isast(l), right: isast(r)
-exports.blockStatement = (stmts = []) -> type: BlockStatement, body: stmts.map(isast)
+exports.blockStatement = (stmts = [], loc=null) -> type: BlockStatement, body: stmts.map(isast), loc: loc
 exports.breakStatement = (label) -> type: BreakStatement, label: isast(label)
 exports.callExpression = (callee, args = []) -> type: CallExpression, callee: isast(callee), arguments: args.map(isast)
 exports.catchClause = (param, body, guard) -> type: CatchClause, body: body, param: isast(param), guard: isnullableast(guard)

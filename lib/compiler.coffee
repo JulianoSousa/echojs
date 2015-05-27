@@ -689,6 +689,7 @@ class LLVMIRVisitor extends TreeVisitor
                         for casenum in [0...case_checks.length-1]
                                 test = @visit case_checks[casenum].test
                                 eqop = @ejs_binops["==="]
+                                @setDebugLoc(test)
                                 discTest = @createCall eqop, [discr, test], "test", !eqop.doesNotThrow
                         
                                 if discTest._ejs_returns_ejsval_bool

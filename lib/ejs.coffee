@@ -24,6 +24,7 @@ host_platform = os.platform()
 
 options =
         # our defaults:
+        debug: false
         debug_level: 0
         debug_passes: new Set
         warn_on_undeclared: false
@@ -102,6 +103,9 @@ add_import_variable = (arg) ->
         options.import_variables.push({ variable: arg.substring(0, equal_idx), value: arg.substring(equal_idx+1) })
         
 args =
+        "-g":
+                flag:    "debug"
+                help:    "enable debugging of generated code"
         "-q":
                 flag:    "quiet"
                 help:    "don't output anything during compilation except errors."
@@ -454,9 +458,12 @@ do_final_link = (main_file, modules) ->
         clang = spawn target_linker, clang_args
         clang.stderr.on "data", (data) -> console.warn "#{data}"
         clang.on "exit", (code) ->
-                if not options.leave_temp_files
+                # -g seems to require --leave-temp behavior, since gdb tries to load the dwarf info from the .o?  ugh
+                if not options.leave_temp_files and not options.debug
                         cleanup ->
                                 console.warn "#{util.bold()}done.#{util.reset()}" if not options.quiet
+                else
+                        console.warn "#{util.bold()}done.#{util.reset()}" if not options.quiet
 
 cleanup = (done) ->
         files_to_delete = temp_files.length

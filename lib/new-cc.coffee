@@ -294,7 +294,9 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
                         
                 n = super(n)
                 @current_scope.location.func.scratch_size = Math.max @current_scope.location.func.scratch_size, n.arguments.length
-                intrinsic(invokeClosure_id, [n.callee].concat(n.arguments))
+                rv = intrinsic(invokeClosure_id, [n.callee].concat(n.arguments))
+                rv.loc = n.loc
+                rv
 
         visitNewExpression: (n) ->
                 n = super
@@ -309,6 +311,7 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
 
                 rv = intrinsic(invokeClosure_id, [n.callee].concat(n.arguments))
                 rv.type = NewExpression
+                rv.loc = n.loc
                 rv
 
         visitFunction: (n) ->
@@ -356,7 +359,9 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
                         for referent in referents
                                 if referent.referencingScope.differentFunction(@current_scope)
                                         # it's closed over, so we need to set it in our allocated environment
-                                        return setSlotIntrinsic(@env_name(), @env_slot(leftname), rhs)
+                                        rv = setSlotIntrinsic(@env_name(), @env_slot(leftname), rhs)
+                                        rv.loc = n.loc
+                                        return rv
 
                 else if @current_scope.hasReference(leftname)
                         ref = @current_scope.getReference(leftname)
@@ -364,19 +369,29 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
                                 declaringScope = ref.binding.declaringScope
                                 declaringEnv = declaringScope.env
                                 if declaringEnv?.hasSlot(leftname)
-                                        return setSlotIntrinsic(declaringEnv.name, declaringEnv.getSlot(leftname), rhs)
+                                        rv = setSlotIntrinsic(declaringEnv.name, declaringEnv.getSlot(leftname), rhs)
+                                        rv.loc = n.loc
+                                        return rv
                                 else
-                                        return intrinsic(setLocal_id, [n.left, rhs])
+                                        rv = intrinsic(setLocal_id, [n.left, rhs])
+                                        rv.loc = n.loc
+                                        return rv
                         else if ref.binding.type is 'global'
                                 if leftname is "undefined"
                                         reportError(SyntaxError, "reassigning 'undefined' not permitted.", @filename, n.loc)
-                                return intrinsic(setGlobal_id, [n.left, rhs])
+                                rv = intrinsic(setGlobal_id, [n.left, rhs])
+                                rv.loc = n.loc
+                                return rv
                         else if ref.binding.type is 'module'
-                                return ref.binding.getStoreIntrinsic(@visit(rhs))
+                                rv = ref.binding.getStoreIntrinsic(@visit(rhs))
+                                rv.loc = n.loc
+                                return rv
                         else
                                 throw new Error("unhandled binding type #{ref.binding.type}")
 
-                intrinsic(setLocal_id, [n.left, rhs])
+                rv = intrinsic(setLocal_id, [n.left, rhs])
+                rv.loc = n.loc
+                rv
                                                 
         visitIdentifier: (n) ->
                 referents = @current_scope.getReferents(n.name)
@@ -391,11 +406,17 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
                                 declaringScope = ref.binding.declaringScope
                                 declaringEnv = declaringScope.env
                                 if declaringEnv?.hasSlot(n.name)
-                                        return slotIntrinsic(declaringEnv.name, declaringEnv.getSlot(n.name))
+                                        rv = slotIntrinsic(declaringEnv.name, declaringEnv.getSlot(n.name))
+                                        rv.loc = n.loc
+                                        return rv
                                 else
-                                        return intrinsic(getLocal_id, [n])
+                                        rv = intrinsic(getLocal_id, [n])
+                                        rv.loc = n.loc
+                                        return rv
                         else if ref.binding.type is 'global'
-                                return intrinsic(getGlobal_id, [n])
+                                rv = intrinsic(getGlobal_id, [n])
+                                rv.loc = n.loc
+                                return rv
                         else if ref.binding.type is 'module'
                                 # check if the export is const+literal.  if it is, just propagate it here
                                 module_info = @allModules.get(ref.binding.moduleString.value)
@@ -404,11 +425,15 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
                                         return export_info.constval
                                 return ref.binding.getLoadIntrinsic()
                         else if ref.binding.type is 'module-exotic'
-                                return ref.binding.getLoadIntrinsic()
+                                rv = ref.binding.getLoadIntrinsic()
+                                rv.loc = n.loc
+                                return rv
                         else
                                 throw new Error("unhandled binding type #{ref.binding.type}")
 
-                intrinsic(getLocal_id, [n])
+                rv = intrinsic(getLocal_id, [n])
+                rv.loc = n.loc
+                rv
 
         visitMemberExpression: (n) ->
                 n = super(n)
@@ -432,7 +457,9 @@ SubstituteVariables = class SubstituteVariables extends TransformPass
                         throw new Error("doesn't export #{moduleExport}") # XXX
                 export_info = module_info.exports.get(moduleExport)
 
-                intrinsic(moduleGetSlot_id, [moduleString, b.literal(moduleExport)])
+                rv = intrinsic(moduleGetSlot_id, [moduleString, b.literal(moduleExport)])
+                rv.loc = n.loc
+                return rv
                 
         visitObjectExpression: (n) ->
                 for property in n.properties

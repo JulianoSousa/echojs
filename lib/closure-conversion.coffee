@@ -187,13 +187,13 @@ DesugarClasses = class DesugarClasses extends TransformPass
         visitClassDeclaration: (n) ->
                 n.id = freshClassId() if not n.id?
                 n.superClass = @visit n.superClass
-                iife = @generateClassIIFE(n);
+                iife = @generateClassIIFE(n)
                 b.letDeclaration(n.id, b.callExpression(iife, if n.superClass? then [n.superClass] else []))
                 
         visitClassExpression: (n) ->
                 n.id = freshClassId() if not n.id?
                 n.superClass = @visit n.superClass
-                iife = @generateClassIIFE(n);
+                iife = @generateClassIIFE(n)
                 b.callExpression(iife, if n.superClass? then [n.superClass] else [])
 
 
@@ -259,7 +259,8 @@ DesugarClasses = class DesugarClasses extends TransformPass
                 class_init_iife_body.push b.returnStatement(n.id)
 
                 #  (function (%super?) { ... })
-                b.functionExpression(null, (if n.superClass? then [superid] else []), b.blockStatement(class_init_iife_body))
+                iife_body = b.blockStatement(class_init_iife_body, n.loc)
+                b.functionExpression(b.identifier("#{n.id.name || 'anonclass'}_iife"), (if n.superClass? then [superid] else []), iife_body, [], null, n.loc)
 
         gather_members: (ast_class) ->
                 methods     = new Map
@@ -300,8 +301,12 @@ DesugarClasses = class DesugarClasses extends TransformPass
         create_default_constructor: (ast_class) ->
                 # splat args into the call to super's ctor if there's a superclass
                 args_id = b.identifier('args');
-                functionBody = b.blockStatement(if ast_class.superClass then [b.expressionStatement(b.callExpression(b.identifier('super'), [b.spreadElement(args_id)]))] else []);
-                b.methodDefinition(b.identifier('constructor'), b.functionExpression(null, [], functionBody, [], args_id));
+                functionBody = b.blockStatement(if ast_class.superClass then [b.expressionStatement(b.callExpression(b.identifier('super'), [b.spreadElement(args_id)]))] else [])
+                rtn = b.methodDefinition(b.identifier('constructor'), b.functionExpression(null, [], functionBody, [], args_id))
+                # XXX is this right?  this will cause stepping to bounce to the class's first line.  maybe set them to 0?
+                functionBody.loc = ast_class.loc
+                rtn.loc = ast_class.loc
+                rtn
                 
         create_proto_method: (ast_method, ast_class) ->
                 method = b.functionExpression(b.identifier("#{ast_class.id.name}:#{ast_method.key.name}"), ast_method.value.params, ast_method.value.body, ast_method.value.defaults, ast_method.value.rest, ast_method.value.loc)
@@ -692,7 +697,9 @@ DesugarArrowFunctions = class DesugarArrowFunctions extends TransformPass
 
         visitArrowFunctionExpression: (n) ->
                 if n.expression
+                        old_loc = n.body.loc
                         n.body = b.blockStatement([b.returnStatement(n.body)])
+                        n.body.loc = old_loc
                         n.expression = false
                 n = @visitFunction n
                 n.type = FunctionExpression
@@ -1100,7 +1107,7 @@ class DesugarTemplates extends TransformPass
                 n.body = callsites.concat(n.body)
                 n
                 
-        generateCreateCallsiteIdFunc: (name, quasis) ->
+        generateCreateCallsiteIdFunc: (name, quasis, loc) ->
                 raw_elements = []
                 cooked_elements = []
                 for q in quasis
@@ -1111,11 +1118,11 @@ class DesugarTemplates extends TransformPass
                                          b.property(b.identifier("cooked"), b.arrayExpression(cooked_elements))])
 
                 return b.functionDeclaration(b.identifier("generate_#{name}"), [],
-                        b.blockStatement([b.expressionStatement(intrinsic templateCallsite_id, [b.literal(name), qo])]))
+                                             b.blockStatement([b.expressionStatement(intrinsic templateCallsite_id, [b.literal(name), qo])], loc), [], null, loc)
                         
         visitTaggedTemplateExpression: (n, callsites) ->
                 callsiteid_func_id = freshCallsiteId();
-                callsite_func = @generateCreateCallsiteIdFunc(callsiteid_func_id, n.quasi.quasis)
+                callsite_func = @generateCreateCallsiteIdFunc(callsiteid_func_id, n.quasi.quasis, n.loc)
                 callsites.push callsite_func
                 callsiteid_func_call = b.callExpression(callsite_func.id, [])
                 return b.callExpression(n.tag, [callsiteid_func_call].concat(n.quasi.expressions))
@@ -1478,7 +1485,9 @@ class DesugarDefaults extends TransformPass
                                 if seen_default
                                         reportError(SyntaxError, "Cannot specify non-default parameter after a default parameter", @filename, p.loc)
                                 d = b.undefined()
-                        prepends.push(b.letDeclaration(p, b.conditionalExpression(intrinsic(argPresent_id, [b.literal(i+1), b.literal(n.defaults[i]?)]), intrinsic(getArg_id, [b.literal(i)]), d)))
+                        letdecl = b.letDeclaration(p, b.conditionalExpression(intrinsic(argPresent_id, [b.literal(i+1), b.literal(n.defaults[i]?)]), intrinsic(getArg_id, [b.literal(i)]), d));
+                        letdecl.loc = n.body.loc
+                        prepends.push(letdecl)
                 n.body.body = prepends.concat(n.body.body)
                 n.defaults = []
                 n

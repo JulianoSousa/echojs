@@ -226,7 +226,7 @@ class SRetABI extends ABI
                                 
         
 class LLVMIRVisitor extends TreeVisitor
-        constructor: (@module, @filename, @options, @abi, @allModules, @this_module_info) ->
+        constructor: (@module, @filename, @options, @abi, @allModules, @this_module_info, @dibuilder, @difile) ->
 
                 @idgen = startGenerator()
 
@@ -317,7 +317,12 @@ class LLVMIRVisitor extends TreeVisitor
                 @ejs_symbols = runtime.createSymbolsInterface @module
 
                 @module_atoms = Object.create null
-                @literalInitializationFunction = @module.getOrInsertFunction "_ejs_module_init_string_literals_#{@filename}", types.void, []
+
+                init_function_name = "_ejs_module_init_string_literals_#{@filename}"
+                @literalInitializationFunction = @module.getOrInsertFunction init_function_name, types.void, []
+
+                if @options.debug
+                        @literalInitializationDebugInfo = @dibuilder.createFunction(@difile, init_function_name, init_function_name, @difile, 0, false, true, 0, 0, true, @literalInitializationFunction)
                 
                 # this function is only ever called by this module's toplevel
                 @literalInitializationFunction.setInternalLinkage()
@@ -327,6 +332,9 @@ class LLVMIRVisitor extends TreeVisitor
 
                 entry_bb = new llvm.BasicBlock "entry", @literalInitializationFunction
                 return_bb = new llvm.BasicBlock "return", @literalInitializationFunction
+
+                if @options.debug
+                        ir.setCurrentDebugLocation(llvm.DebugLoc.get(0, 0, @literalInitializationDebugInfo))
 
                 @doInsideBBlock entry_bb, => ir.createBr return_bb
                 @doInsideBBlock return_bb, =>
@@ -353,6 +361,8 @@ class LLVMIRVisitor extends TreeVisitor
                 @currentFunction = @toplevel_function
                 
                 ir.setInsertPoint @resolve_modules_bb
+                if @options.debug
+                        ir.setCurrentDebugLocation(llvm.DebugLoc.get(0, 0, @currentFunction.debug_info))
 
                 uninitialized_bb = new llvm.BasicBlock "module_uninitialized", @toplevel_function
                 initialized_bb = new llvm.BasicBlock "module_initialized", @toplevel_function
@@ -595,7 +605,16 @@ class LLVMIRVisitor extends TreeVisitor
                                 @createCall @ejs_runtime.record_getprop, [consts.int32(@genRecordId()), obj, pname], ""
 
                         @createCall @ejs_runtime.object_getprop, [obj, pname], "getprop_#{prop.name}", canThrow
+
+        setDebugLoc: (ast_node) ->
+                if @options.debug and ast_node?.loc? and @currentFunction?.debug_info?
+                        ir.setCurrentDebugLocation(llvm.DebugLoc.get(ast_node.loc.start.line, ast_node.loc.start.column, @currentFunction.debug_info))
+
                 
+
+        visit: (n) ->
+                @setDebugLoc(n)
+                super
 
         visitOrNull:      (n) -> @visit(n) || @loadNullEjsValue()
         visitOrUndefined: (n) -> @visit(n) || @loadUndefinedEjsValue()
@@ -1005,7 +1024,7 @@ class LLVMIRVisitor extends TreeVisitor
 
         visitFunction: (n) ->
                 debug.log -> "        function #{n.ir_name} at #{@filename}:#{if n.loc? then n.loc.start.line else '<unknown>'}" if not n.toplevel?
-                
+
                 # save off the insert point so we can get back to it after generating this function
                 insertBlock = ir.getInsertBlock()
 
@@ -1025,6 +1044,10 @@ class LLVMIRVisitor extends TreeVisitor
                 #debug.log -> "param #{param.llvm_type} #{param.name}" for param in n.formal_params
 
                 @currentFunction = ir_func
+
+                # we need to do this here as well, since otherwise the allocas and stores we create below for our parameters
+                # could be accidentally attributed to the previous @currentFunction (the last location we set).
+                @setDebugLoc(n)
 
                 # Create a new basic block to start insertion into.
                 entry_bb = new llvm.BasicBlock "entry", ir_func
@@ -1437,8 +1460,12 @@ class LLVMIRVisitor extends TreeVisitor
                 
         addStringLiteralInitialization: (name, ucs2, primstr, val, len) ->
                 saved_insert_point = ir.getInsertBlock()
-
                 ir.setInsertPointStartBB @literalInitializationBB
+                
+                if @options.debug
+                        saved_debug_loc = ir.getCurrentDebugLocation()
+                        ir.setCurrentDebugLocation(llvm.DebugLoc.get(0, 0, @literalInitializationDebugInfo))
+
                 strname = consts.string ir, name
 
                 arg0 = strname
@@ -1448,6 +1475,9 @@ class LLVMIRVisitor extends TreeVisitor
 
                 ir.createCall @ejs_runtime.init_string_literal, [arg0, arg1, arg2, arg3, consts.int32(len)], ""
                 ir.setInsertPoint saved_insert_point
+
+                if @options.debug
+                        ir.setCurrentDebugLocation(saved_debug_loc)
 
         getAtom: (str) ->
                 # check if it's an atom (a runtime library constant) first of all
@@ -2364,7 +2394,7 @@ class LLVMIRVisitor extends TreeVisitor
                 @createEjsBoolSelect cmp
                                 
 class AddFunctionsVisitor extends TreeVisitor
-        constructor: (@module, @abi) ->
+        constructor: (@module, @abi, @dibuilder, @difile) ->
 
         visitFunction: (n) ->
                 if n?.id?.name?
@@ -2390,6 +2420,15 @@ class AddFunctionsVisitor extends TreeVisitor
                 #n.ir_func.setInternalLinkage() if not n.toplevel
                 n.ir_func.setInternalLinkage() if not n.toplevel and n.ir_name.indexOf("__ejs") isnt 0
 
+                lineno = 0
+                col = 0
+                if n.loc?
+                        lineno = n.loc.start.line
+                        col = n.loc.start.column
+
+                if @dibuilder and @difile
+                        n.ir_func.debug_info = @dibuilder.createFunction(@difile, n.ir_name, n.ir_name, @difile, lineno, false, true, lineno, 0, true, n.ir_func)
+                        
                 ir_args = n.ir_func.args
                 for i in [0...n.params.length]
                         ir_args[i].setName(n.params[i].name)
@@ -2408,7 +2447,16 @@ insert_toplevel_func = (tree, moduleInfo) ->
                 body:
                         type: BlockStatement
                         body: tree.body
+                        loc:
+                                start:
+                                        line: 0
+                                        column: 0
+
                 toplevel: true
+                loc:
+                        start:
+                                line: 0
+                                column: 0
 
         tree.body = [toplevel]
         tree
@@ -2434,9 +2482,11 @@ exports.compile = (tree, base_output_filename, source_filename, module_infos, op
         abi = if (options.target_arch is "armv7" or options.target_arch is "armv7s" or options.target_arch is "x86") then new SRetABI() else new ABI()
 
         if source_filename.lastIndexOf(".js") == source_filename.length - 3
-                source_filename = source_filename.substring(0, source_filename.length-3)
+                module_filename = source_filename.substring(0, source_filename.length-3)
+        else
+                module_filename = source_filename
                 
-        this_module_info = module_infos.get(source_filename)
+        this_module_info = module_infos.get(module_filename)
         
         tree = insert_toplevel_func tree, this_module_info
 
@@ -2480,13 +2530,22 @@ exports.compile = (tree, base_output_filename, source_filename, module_infos, op
                         tree.body.push(f)
                 if module_prop.getter? or module_prop.setter?
                         module_accessors.push module_prop
-        
-        visitor = new AddFunctionsVisitor module, abi
+
+        if options.debug
+                dibuilder = new llvm.DIBuilder module
+                difile = dibuilder.createFile(source_filename, process.cwd())
+
+                dibuilder.createCompileUnit(source_filename, process.cwd(), "ejs", true, "", 2);
+
+        visitor = new AddFunctionsVisitor module, abi, dibuilder, difile
         tree = visitor.visit tree
 
         debug.log -> escodegen.generate tree
 
-        visitor = new LLVMIRVisitor module, source_filename, options, abi, module_infos, this_module_info
+        visitor = new LLVMIRVisitor module, source_filename, options, abi, module_infos, this_module_info, dibuilder, difile
+        
+        if options.debug
+                dibuilder.finalize()
         
         visitor.emitModuleInfo()
         
@@ -2555,21 +2614,23 @@ class JSModuleInfo extends ModuleInfo
         getExportGetter: (ident) ->
                 export_info = @exports.get(ident)
                 function_id = b.identifier("get_export_#{ident}")
+                loc = { start: { line: 0, column: 0 } }
                 if export_info.constval?
-                        b.functionExpression(function_id, [b.identifier("%env_unused")], b.blockStatement([b.returnStatement(export_info.constval)]))
+                        b.functionExpression(function_id, [b.identifier("%env_unused")], b.blockStatement([b.returnStatement(export_info.constval)], loc), [], null, loc)
                 else
-                        b.functionExpression(function_id, [b.identifier("%env_unused")], b.blockStatement([b.returnStatement(intrinsic(moduleGetSlot_id, [b.literal(@path), b.literal(ident)]))]))
+                        b.functionExpression(function_id, [b.identifier("%env_unused")], b.blockStatement([b.returnStatement(intrinsic(moduleGetSlot_id, [b.literal(@path), b.literal(ident)]))], loc), [], null, loc)
 
         getExportSetter: (ident) ->
                 export_info = @exports.get(ident)
                 function_id = b.identifier("set_export_#{ident}")
+                loc = { start: { line: 0, column: 0 } }
                 ###
                 if export_info.constval?
                         undefined
                 else
                         b.functionExpression(function_id, [b.identifier("%env_unused"), b.identifier('value')], b.blockStatement([intrinsic(moduleSetSlot_id, [b.literal(@path), b.literal(ident), b.identifier('value')])]))
                 ###
-                b.functionExpression(function_id, [b.identifier("%env_unused"), b.identifier('value')], b.blockStatement([intrinsic(moduleSetSlot_id, [b.literal(@path), b.literal(ident), b.identifier('value')])]))
+                b.functionExpression(function_id, [b.identifier("%env_unused"), b.identifier('value')], b.blockStatement([intrinsic(moduleSetSlot_id, [b.literal(@path), b.literal(ident), b.identifier('value')])], loc), [], null, loc)
                                 
 
 class NativeModuleInfo extends ModuleInfo
@@ -2583,12 +2644,13 @@ allModules = new Map()
 nativeModules = new Map()
 
 class GatherImports extends TreeVisitor
-        constructor: (@filename, @path, @toplevel_path, @import_vars) ->
+        constructor: (@filename, p, @toplevel_path, @import_vars) ->
                 @importList = []
                 # remove our .js suffix since all imports are suffix-free
-                if @filename.lastIndexOf(".js") == @filename.length - 3
+                if path.extname(@filename) is '.js'
                         @filename = @filename.substring(0, @filename.length-3)
 
+                @path = p
                 @moduleInfo = new JSModuleInfo(@filename)
                 
                 allModules.set(@filename, @moduleInfo)
@@ -2720,7 +2782,7 @@ gatherAllNativeModules = (module_dirs) ->
                 try
                         files = fs.readdirSync mdir
                         files.forEach (f) ->
-                                if f.indexOf('.ejs') is f.length-4
+                                if path.extname(f) is '.ejs'
                                         try
                                                 gatherNativeModuleInfo path.resolve mdir, f
                                         catch e

@@ -828,9 +828,15 @@ class NameAnonymousFunctions extends TransformPass
                 #if lhs.type is Identifier and rhs.type is FunctionExpression and not rhs.id?.name
                 #        rhs.display = <something pretty about the lhs>
                 #
-                if rhs.type is FunctionExpression and not rhs.id?.name
+                if rhs.type is FunctionExpression and not rhs.id?.name?
                         rhs.displayName = escodegen.generate lhs
                 n
+
+        visitFunction: (n) ->
+                if n.id?.name?
+                        n.displayName = n.id.name
+                super
+                
 
 #
 # special pass to inline some common idioms dealing with IIFEs

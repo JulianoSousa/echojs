@@ -2428,7 +2428,7 @@ class AddFunctionsVisitor extends TreeVisitor
                         col = n.loc.start.column
 
                 if @dibuilder and @difile
-                        n.ir_func.debug_info = @dibuilder.createFunction(@difile, n.ir_name, n.ir_name, @difile, lineno, false, true, lineno, 0, true, n.ir_func)
+                        n.ir_func.debug_info = @dibuilder.createFunction(@difile, n.ir_name, n.displayName || n.ir_name, @difile, lineno, false, true, lineno, 0, true, n.ir_func)
                         
                 ir_args = n.ir_func.args
                 for i in [0...n.params.length]
